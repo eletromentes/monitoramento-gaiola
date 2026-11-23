@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Eletromentes // Monitoramento Gaiola NH - Posição 13</title>
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Font Inter & Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+  <!-- QRCode.js Library -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+  <!-- Paho MQTT JS Client (WebSockets) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+            tech: ['Chakra Petch', 'sans-serif']
+          },
+          colors: {
+            alma: {
+              bg: '#0f1115',          
+              panel: '#15181e',       
+              card: '#1a1d24',        
+              border: '#2a2f3a',      
+              borderLight: '#3f4450', 
+              green: '#34d399',       
+              greenGlow: 'rgba(52, 211, 153, 0.15)',
+              cyan: '#a2a9b8',        
+              blue: '#3f4450',        
+              yellow: '#fbbf24',
+              red: '#f87171',
+              textMuted: '#8b929e',   
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    body { background-color: #0f1115; color: #e0e2e6; font-family: 'Inter', sans-serif; overflow-x: hidden; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0f1115; }
+    ::-webkit-scrollbar-thumb { background: #2a2f3a; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #3f4450; }
+
+    .led-tx-active { background-color: #34d399; box-shadow: 0 0 10px #34d399, 0 0 20px #34d399; animation: pulse-led 0.6s ease-in-out infinite alternate; }
+    .led-tx-off { background-color: #163327; box-shadow: inset 0 0 4px #000; }
+    @keyframes pulse-led { from { transform: scale(1); opacity: 0.8; } to { transform: scale(1.25); opacity: 1; } }
+
+    .glow-box-green { box-shadow: 0 0 15px rgba(52, 211, 153, 0.05); border: 1px solid rgba(52, 211, 153, 0.2); }
+    .glow-box-cyan { box-shadow: 0 0 15px rgba(162, 169, 184, 0.05); border: 1px solid rgba(162, 169, 184, 0.3); }
+    .glow-box-red { box-shadow: 0 0 20px rgba(248, 113, 113, 0.15); border: 1px solid rgba(248, 113, 113, 0.4); }
+
+    input[type=range] { -webkit-appearance: none; background: #2a2f3a; height: 6px; border-radius: 3px; }
+    input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 18px; width: 18px; border-radius: 50%; background: #a2a9b8; cursor: pointer; box-shadow: 0 0 5px rgba(162, 169, 184, 0.5); border: 2px solid #ffffff; }
+
+    .roll-spinning { animation: spin-roll linear infinite; }
+    @keyframes spin-roll { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    .bg-grid-pattern { background-image: radial-gradient(rgba(42, 47, 58, 0.3) 1px, transparent 1px); background-size: 24px 24px; }
+  </style>
+</head>
+<body class="min-h-screen bg-grid-pattern flex flex-col justify-between">
+
+  <!-- TOP HEADER / BAR -->
+  <header class="bg-alma-panel border-b border-alma-border sticky top-0 z-40 px-4 py-3 shadow-xl">
+    <div class="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-3">
+      
+      <div class="flex items-center space-x-3 w-full md:w-auto justify-between md:justify-start">
+        <div class="flex items-center space-x-2">
+          <div class="w-9 h-9 bg-alma-borderLight rounded-lg flex items-center justify-center font-tech font-bold text-white text-xl shadow-md border border-alma-border">E</div>
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="font-tech font-bold text-lg tracking-wider text-white">Eletromentes <span class="text-alma-cyan">IoT</span></span>
+              <span class="text-xs font-mono px-2 py-0.5 rounded bg-alma-border text-alma-textMuted border border-alma-borderLight">v1.0.0</span>
+            </div>
+            <p class="text-xs text-alma-textMuted font-mono">Monitoramento de Mancais — Gaiola NH (Posição 13)</p>
+          </div>
+        </div>
+
+        <div class="flex items-center md:hidden gap-2 bg-alma-bg px-2.5 py-1.5 rounded-full border border-alma-border">
+          <div id="tx-led-mobile" class="w-3 h-3 rounded-full led-tx-off transition-all duration-300"></div>
+          <span class="text-xs font-mono text-alma-green">LoRa 915MHz</span>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-3 w-full md:w-auto justify-between md:justify-end">
+        <div class="flex items-center gap-3 bg-alma-card px-3.5 py-1.5 rounded-lg border border-alma-border">
+          <div class="flex items-center gap-2">
+            <div id="tx-led" class="w-3.5 h-3.5 rounded-full led-tx-off transition-all duration-300"></div>
+            <div class="text-left">
+              <span class="text-[10px] uppercase font-mono block text-alma-textMuted leading-tight">LED TX LoRaWAN</span>
+              <span id="tx-status-label" class="text-xs font-mono font-bold text-white">STANDBY (20s)</span>
+            </div>
+          </div>
+          <div class="h-6 w-px bg-alma-border"></div>
+          <div class="text-center">
+            <span class="text-[10px] uppercase font-mono block text-alma-textMuted leading-tight">Próximo Envio</span>
+            <span id="timer-countdown" class="text-xs font-mono font-bold text-alma-cyan">20s</span>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2 bg-alma-card px-3 py-1.5 rounded-lg border border-alma-border">
+          <span class="relative flex h-2.5 w-2.5">
+            <span id="mqtt-ping-pulse" class="animate-ping absolute inline-flex h-full w-full rounded-full bg-alma-green opacity-75"></span>
+            <span id="mqtt-ping-dot" class="relative inline-flex rounded-full h-2.5 w-2.5 bg-alma-green"></span>
+          </span>
+          <span id="system-mode-badge" class="text-xs font-mono font-medium text-emerald-400">Conectando HiveMQ...</span>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <button onclick="openQrModal()" class="px-3 py-1.5 bg-alma-borderLight hover:bg-alma-border text-white rounded-lg text-xs font-mono font-semibold transition flex items-center gap-1.5 shadow-sm border border-alma-border">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"/></svg>
+            <span>QR Code Professores</span>
+          </button>
+          
+          <button onclick="toggleConfigModal()" class="p-1.5 bg-alma-card hover:bg-alma-border text-alma-textMuted hover:text-white rounded-lg border border-alma-border transition" title="Configurações MQTT / Gateway">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+          </button>
+        </div>
+
+      </div>
+    </div>
+  </header>
+
+  <!-- BANNER -->
+  <section class="max-w-7xl mx-auto px-4 mt-4">
+    <div class="bg-alma-card border border-alma-border rounded-xl p-3.5 md:p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 text-xs shadow-md">
+      <div class="flex items-center gap-3">
+        <div class="hidden sm:flex p-2.5 bg-alma-borderLight/30 border border-alma-borderLight rounded-lg text-alma-cyan">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <span class="font-mono font-bold text-white uppercase tracking-wider text-sm">Gaiola NH 13 — Parâmetros Operacionais</span>
+            <span class="bg-alma-borderLight text-white border border-alma-border px-2 py-0.5 rounded text-[10px] font-mono font-semibold">Gaiola Posição 13</span>
+          </div>
+          <p class="text-alma-textMuted mt-0.5">
+            Faixa nominal ideal: <strong class="text-emerald-400">27.2 °C a 40.4 °C</strong> (Média: 33.0 °C). Elevação abrupta é sinal prévio de falha grave (Evita parada não planejada de <span class="text-alma-red font-semibold">4 horas</span>).
+          </p>
+        </div>
+      </div>
+      <div class="flex items-center gap-3 w-full md:w-auto justify-end border-t md:border-t-0 border-alma-border pt-2 md:pt-0 font-mono text-[11px]">
+        <span class="text-alma-textMuted">Powerbank: <strong class="text-white">5V 3A</strong></span>
+        <span class="text-alma-textMuted">Resistor: <strong class="text-white">5W 10Ω</strong></span>
+        <span class="text-alma-textMuted">MOSFET: <strong class="text-white">IRNL44</strong></span>
+        <span class="text-alma-textMuted">Servos: <strong class="text-white">2x MG90S</strong></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- MAIN DASHBOARD CONTENT -->
+  <main class="max-w-7xl mx-auto px-4 py-5 flex-grow w-full space-y-6">
+
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+
+      <!-- KPI 1 -->
+      <div id="kpi-temp-card" class="bg-alma-card border border-alma-border rounded-xl p-4 flex flex-col justify-between relative overflow-hidden transition duration-300 shadow-md">
+        <div class="flex items-center justify-between text-alma-textMuted text-xs font-mono uppercase">
+          <span>Temp. Mancal (DS1820)</span>
+          <span id="temp-status-badge" class="px-2 py-0.5 rounded text-[10px] bg-emerald-900/30 text-emerald-400 border border-emerald-800 font-semibold">NORMAL</span>
+        </div>
+        <div class="my-3 flex items-baseline justify-between">
+          <div class="flex items-baseline gap-1">
+            <span id="kpi-temp-val" class="font-tech font-bold text-4xl text-white">39.8</span>
+            <span class="text-alma-textMuted font-mono text-lg">°C</span>
+          </div>
+          <div class="text-right font-mono text-xs">
+            <div class="text-alma-textMuted">Alvo: <span class="text-alma-cyan font-bold">40.0 °C</span></div>
+            <div class="text-[10px] text-alma-textMuted">Var: <span id="temp-trend" class="text-emerald-400">+0.1°C/min</span></div>
+          </div>
+        </div>
+        <div class="w-full bg-alma-bg rounded-full h-1.5 overflow-hidden border border-alma-border">
+          <div id="temp-progress-bar" class="bg-alma-cyan h-full transition-all duration-500" style="width: 78%;"></div>
+        </div>
+      </div>
+
+      <!-- KPI 2 -->
+      <div class="bg-alma-card border border-alma-border rounded-xl p-4 flex flex-col justify-between shadow-md">
+        <div class="flex items-center justify-between text-alma-textMuted text-xs font-mono uppercase">
+          <span>MOSFET IRNL44 / Resistor</span>
+          <span id="heating-state-badge" class="px-2 py-0.5 rounded text-[10px] bg-alma-borderLight text-white border border-alma-border font-semibold">PID ATIVO</span>
+        </div>
+        <div class="my-3 flex items-baseline justify-between">
+          <div>
+            <span id="kpi-pwm-val" class="font-tech font-bold text-3xl text-alma-cyan">42</span>
+            <span class="text-alma-textMuted font-mono text-base">% PWM</span>
+          </div>
+          <div class="text-right font-mono text-xs">
+            <div class="text-alma-textMuted">Potência: <span id="kpi-power-val" class="text-white font-bold">1.05 W</span></div>
+            <div class="text-[10px] text-alma-textMuted">Resistor: 5W 10Ω</div>
+          </div>
+        </div>
+        <div class="text-[11px] font-mono text-alma-textMuted flex justify-between pt-1 border-t border-alma-border/60">
+          <span>Modo: <strong id="kpi-control-mode" class="text-white">Automático</strong></span>
+          <span>Lim. Seg: <strong class="text-emerald-400">OK</strong></span>
+        </div>
+      </div>
+
+      <!-- KPI 3 -->
+      <div class="bg-alma-card border border-alma-border rounded-xl p-4 flex flex-col justify-between shadow-md">
+        <div class="flex items-center justify-between text-alma-textMuted text-xs font-mono uppercase">
+          <span>Rotação Cilindros (MG90S)</span>
+          <span class="px-2 py-0.5 rounded text-[10px] bg-alma-borderLight text-white border border-alma-border font-semibold">2 SERVOS</span>
+        </div>
+        <div class="my-2 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <div class="relative w-8 h-8 flex items-center justify-center">
+              <svg id="roll-svg-icon" class="w-7 h-7 text-alma-cyan roll-spinning" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            </div>
+            <div>
+              <div id="kpi-rpm-val" class="font-tech font-bold text-2xl text-white">0</div>
+              <div class="text-[10px] font-mono text-alma-textMuted">RPM Média (180 - 350)</div>
+            </div>
+          </div>
+        </div>
+        <div class="text-[11px] font-mono text-alma-textMuted flex justify-between pt-1 border-t border-alma-border/60">
+          <span>Sup: <strong id="kpi-rpm-top" class="text-alma-cyan">0 RPM</strong></span>
+          <span>Inf: <strong id="kpi-rpm-bot" class="text-alma-cyan">0 RPM</strong></span>
+        </div>
+      </div>
+
+      <!-- KPI 4 -->
+      <div class="bg-alma-card border border-alma-border rounded-xl p-4 flex flex-col justify-between shadow-md">
+        <div class="flex items-center justify-between text-alma-textMuted text-xs font-mono uppercase">
+          <span>LoRaWAN SX1262</span>
+          <span class="px-2 py-0.5 rounded text-[10px] bg-emerald-900/30 text-emerald-400 border border-emerald-800 font-semibold">915.0 MHz</span>
+        </div>
+        <div class="my-3 flex items-baseline justify-between">
+          <div>
+            <span id="kpi-lora-pkts" class="font-tech font-bold text-3xl text-emerald-400">142</span>
+            <span class="text-alma-textMuted font-mono text-xs">pacotes</span>
+          </div>
+          <div class="text-right font-mono text-xs">
+            <div class="text-alma-textMuted">RSSI: <span class="text-white font-bold">-68 dBm</span></div>
+            <div class="text-[10px] text-alma-textMuted">SNR: <span class="text-emerald-400">+9.5 dB</span></div>
+          </div>
+        </div>
+        <div class="text-[11px] font-mono text-alma-textMuted flex justify-between pt-1 border-t border-alma-border/60">
+          <span>Ciclo: <strong class="text-white">20 s</strong></span>
+          <span>Banda: <strong class="text-alma-cyan">AU915</strong></span>
+        </div>
+      </div>
+
+      <!-- KPI 5 -->
+      <div id="kpi-ai-card" class="bg-alma-card border border-alma-border rounded-xl p-4 flex flex-col justify-between transition duration-300 shadow-md">
+        <div class="flex items-center justify-between text-alma-textMuted text-xs font-mono uppercase">
+          <span>Isolation Forest IA</span>
+          <span id="ai-status-badge" class="px-2 py-0.5 rounded text-[10px] bg-alma-border text-alma-textMuted border border-alma-borderLight font-semibold">STANDBY</span>
+        </div>
+        <div class="my-2">
+          <div class="flex items-baseline justify-between">
+            <span id="kpi-ai-score" class="font-tech font-bold text-2xl text-white">0.14</span>
+            <span class="text-[10px] font-mono text-alma-textMuted">Score (&lt;0.50 OK)</span>
+          </div>
+          <p class="text-[10px] text-alma-textMuted font-mono mt-0.5">Módulo de IA em espera para implantação futura.</p>
+        </div>
+        <button onclick="toggleAnomalySimulation()" id="btn-toggle-anomaly" class="w-full mt-1 py-1 px-2 bg-alma-borderLight hover:bg-alma-border text-white rounded border border-alma-border font-mono text-[11px] transition flex items-center justify-center gap-1 shadow-sm">
+          <span id="btn-anomaly-label">Simular Anomalia</span>
+        </button>
+      </div>
+
+    </div>
+
+    <!-- 2-COL LAYOUT -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      
+      <!-- LEFT -->
+      <div class="lg:col-span-2 space-y-6">
+        <div class="bg-alma-card border border-alma-border rounded-xl p-4 md:p-5 shadow-xl relative">
+          <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 mb-4 pb-3 border-b border-alma-border">
+            <div>
+              <h3 class="font-tech font-bold text-base text-white tracking-wide flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-alma-cyan"></span>
+                TENDÊNCIA DA TEMPERATURA DOS MANCAIS DA GAIOLA NH
+              </h3>
+              <p class="text-xs text-alma-textMuted font-mono">Monitoramento contínuo com Setpoint PID (40 °C) e Limites Críticos</p>
+            </div>
+          </div>
+          <div class="relative w-full h-64 md:h-72" id="canvas-container">
+            <canvas id="tempChart" class="w-full h-full block absolute inset-0"></canvas>
+          </div>
+          <div class="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-alma-border/60 font-mono text-xs text-center">
+            <div><span class="text-alma-textMuted block text-[10px]">Mínima Registrada</span><span id="chart-min-val" class="font-bold text-white">27.2 °C</span></div>
+            <div><span class="text-alma-textMuted block text-[10px]">Média Geral</span><span id="chart-avg-val" class="font-bold text-alma-cyan">33.0 °C</span></div>
+            <div><span class="text-alma-textMuted block text-[10px]">Máxima Registrada</span><span id="chart-max-val" class="font-bold text-emerald-400">40.4 °C</span></div>
+          </div>
+        </div>
+
+        <div class="bg-alma-card border border-alma-border rounded-xl p-4 md:p-5 shadow-xl">
+          <div class="flex items-center justify-between mb-3 pb-2 border-b border-alma-border">
+            <div>
+              <h3 class="font-tech font-bold text-sm text-white tracking-wide flex items-center gap-2">
+                <svg class="w-4 h-4 text-alma-cyan" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                HISTÓRICO DE TRANSMISSÃO LORAWAN (A CADA 20 SEGUNDOS)
+              </h3>
+              <p class="text-xs text-alma-textMuted font-mono">Payloads codificados via LilyGO T3S3 (SX1262 915 MHz)</p>
+            </div>
+            <button onclick="clearTelemetryLog()" class="text-xs font-mono text-alma-textMuted hover:text-white px-2 py-1 bg-alma-bg rounded border border-alma-border transition">Limpar Log</button>
+          </div>
+          <div class="overflow-x-auto max-h-56">
+            <table class="w-full text-left font-mono text-xs text-alma-textMuted">
+              <thead class="bg-alma-panel text-white uppercase text-[10px] sticky top-0 border-b border-alma-border">
+                <tr><th class="py-2 px-3">Hora</th><th class="py-2 px-3">Freq</th><th class="py-2 px-3">Temp (DS1820)</th><th class="py-2 px-3">PWM MOSFET</th><th class="py-2 px-3">RPM Servos</th><th class="py-2 px-3">Status</th><th class="py-2 px-3 text-right">LED TX</th></tr>
+              </thead>
+              <tbody id="telemetry-log-body" class="divide-y divide-alma-border/40"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT CONTROLS -->
+      <div class="space-y-6">
+        
+        <!-- MOSFET -->
+        <div class="bg-alma-card border border-alma-border rounded-xl p-4 md:p-5 shadow-xl space-y-4">
+          <div class="flex items-center justify-between pb-2 border-b border-alma-border">
+            <h3 class="font-tech font-bold text-sm text-white tracking-wide flex items-center gap-2">
+              <svg class="w-4 h-4 text-alma-cyan" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z"/></svg>
+              AQUECIMENTO MOSFET
+            </h3>
+            <span class="text-[10px] font-mono text-alma-cyan bg-alma-border px-2 py-0.5 rounded border border-alma-borderLight">Resistor 5W 10Ω</span>
+          </div>
+
+          <div class="flex items-center justify-between bg-alma-panel p-1.5 rounded-lg border border-alma-border font-mono text-xs">
+            <span class="text-alma-textMuted px-2">Modo de Controle:</span>
+            <div class="flex items-center gap-1">
+              <button id="btn-mode-auto" onclick="setControlMode('auto')" class="px-3 py-1 rounded bg-alma-borderLight text-white font-bold transition">AUTO (PID)</button>
+              <button id="btn-mode-manual" onclick="setControlMode('manual')" class="px-3 py-1 rounded text-alma-textMuted hover:text-white transition">MANUAL</button>
+            </div>
+          </div>
+
+          <div id="container-setpoint-slider" class="space-y-2">
+            <div class="flex justify-between items-center text-xs font-mono">
+              <label for="slider-setpoint" class="text-alma-textMuted">Setpoint de Temperatura:</label>
+              <span class="font-bold text-alma-cyan text-sm"><span id="val-setpoint">40.0</span> °C</span>
+            </div>
+            <input type="range" id="slider-setpoint" min="30.0" max="50.0" step="0.5" value="40.0" oninput="updateSetpoint(this.value)" class="w-full">
+            <div class="flex justify-between text-[10px] font-mono text-alma-textMuted"><span>30.0 °C</span><span class="text-emerald-400 font-semibold">Alvo: 40.0 °C</span><span>50.0 °C</span></div>
+          </div>
+
+          <div id="container-manual-pwm" class="space-y-2 hidden">
+            <div class="flex justify-between items-center text-xs font-mono">
+              <label for="slider-pwm" class="text-alma-textMuted">Duty Cycle MOSFET (PWM):</label>
+              <span class="font-bold text-alma-cyan text-sm"><span id="val-manual-pwm">50</span> %</span>
+            </div>
+            <input type="range" id="slider-pwm" min="0" max="100" step="1" value="50" oninput="updateManualPWM(this.value)" class="w-full">
+            <div class="flex justify-between text-[10px] font-mono text-alma-textMuted"><span>0% (Desligado)</span><span>50% (~1.25W)</span><span>100% (5W Máx)</span></div>
+          </div>
+
+          <div class="bg-alma-bg p-3 rounded-lg border border-alma-border space-y-1.5 font-mono text-xs">
+            <div class="flex justify-between"><span class="text-alma-textMuted">Alimentação Powerbank:</span><span class="text-white font-semibold">5.0 V DC / 3.0 A Max</span></div>
+            <div class="flex justify-between"><span class="text-alma-textMuted">Dissipação Estimada:</span><span id="calc-power-watt" class="text-alma-cyan font-semibold">1.05 W</span></div>
+          </div>
+        </div>
+
+        <!-- SERVOS -->
+        <div class="bg-alma-card border border-alma-border rounded-xl p-4 md:p-5 shadow-xl space-y-4">
+          <div class="flex items-center justify-between pb-2 border-b border-alma-border">
+            <h3 class="font-tech font-bold text-sm text-white tracking-wide flex items-center gap-2">
+              <svg class="w-4 h-4 text-alma-cyan" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
+              VELOCIDADE DOS SERVOS MG90S
+            </h3>
+          </div>
+
+          <div class="grid grid-cols-3 gap-2 font-mono text-[11px]">
+            <button onclick="setServoPreset(180)" class="py-1.5 px-2 bg-alma-bg hover:bg-alma-border text-alma-textMuted hover:text-white rounded border border-alma-border text-center transition">180 RPM<br><span class="text-[9px] opacity-70">Mínimo</span></button>
+            <button onclick="setServoPreset(260)" class="py-1.5 px-2 bg-alma-borderLight text-white rounded border border-alma-borderLight text-center font-bold transition">260 RPM<br><span class="text-[9px] opacity-70">Nominal</span></button>
+            <button onclick="setServoPreset(340)" class="py-1.5 px-2 bg-alma-bg hover:bg-alma-border text-alma-textMuted hover:text-white rounded border border-alma-border text-center transition">340 RPM<br><span class="text-[9px] opacity-70">Carga Alta</span></button>
+          </div>
+
+          <div class="space-y-1.5">
+            <div class="flex justify-between text-xs font-mono"><label for="slider-servo-top" class="text-alma-textMuted">Cilindro Superior (Servo 1):</label><span class="font-bold text-white"><span id="val-servo-top">0</span> RPM</span></div>
+            <input type="range" id="slider-servo-top" min="0" max="350" step="5" value="0" oninput="updateServoTop(this.value)" class="w-full">
+          </div>
+
+          <div class="space-y-1.5">
+            <div class="flex justify-between text-xs font-mono"><label for="slider-servo-bot" class="text-alma-textMuted">Cilindro Inferior (Servo 2):</label><span class="font-bold text-white"><span id="val-servo-bot">0</span> RPM</span></div>
+            <input type="range" id="slider-servo-bot" min="0" max="350" step="5" value="0" oninput="updateServoBot(this.value)" class="w-full">
+          </div>
+        </div>
+
+        <!-- LORA -->
+        <div class="bg-alma-card border border-alma-border rounded-xl p-4 md:p-5 shadow-xl space-y-3">
+          <h3 class="font-tech font-bold text-sm text-white tracking-wide flex items-center gap-2 pb-2 border-b border-alma-border">
+            <svg class="w-4 h-4 text-alma-cyan" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071a10 10 0 0114.142 0M1.757 8.929a16 16 0 0122.486 0"/></svg>
+            DISPARO DE TELEMETRIA LORAWAN
+          </h3>
+          <button onclick="triggerManualLoraTx()" class="w-full py-2.5 bg-alma-borderLight hover:bg-alma-border text-white font-mono font-bold text-xs rounded-lg shadow-md transition flex items-center justify-center gap-2 border border-alma-border">
+            <div class="w-2 h-2 rounded-full bg-white animate-pulse"></div>
+            <span>FORÇAR TRANSMISSÃO LORAWAN AGORA</span>
+          </button>
+        </div>
+
+      </div>
+    </div>
+  </main>
+
+  <!-- FOOTER -->
+  <footer class="bg-alma-panel border-t border-alma-border mt-8 py-4 px-4 font-mono text-xs text-alma-textMuted text-center">
+    <div><span class="text-white font-bold">Eletromentes</span> // Protótipo Educacional SENAI / FIEMA — Monitoramento Gaiola NH (Posição 13)</div>
+  </footer>
+
+  <!-- QR CODE MODAL FOR PROFESSORS PRESENTATION -->
+  <div id="qr-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+    <div class="bg-alma-card border border-alma-border rounded-2xl max-w-sm w-full p-6 text-center space-y-4 shadow-2xl relative">
+      <button onclick="closeQrModal()" class="absolute top-4 right-4 text-alma-textMuted hover:text-white p-2">X</button>
+      <div>
+        <h3 class="font-tech font-bold text-lg text-white">APRESENTAÇÃO DOS PROFESSORES</h3>
+        <p class="text-xs text-alma-textMuted font-mono mt-1">Escaneie o QR Code abaixo com o celular para acessar a interface de monitoramento em tempo real.</p>
+      </div>
+      <div class="bg-white p-4 rounded-xl flex items-center justify-center mx-auto w-52 h-52 shadow-inner">
+        <div id="qrcode-target"></div>
+      </div>
+      <div class="text-[11px] font-mono text-alma-textMuted bg-alma-bg p-2 rounded-lg border border-alma-border">
+        URL: <span id="qr-url-text" class="text-alma-cyan break-all"></span>
+      </div>
+      <button onclick="closeQrModal()" class="w-full py-2 bg-alma-borderLight hover:bg-alma-border text-white font-mono text-xs rounded-lg transition border border-alma-border">Fechar Janela</button>
+    </div>
+  </div>
+
+  <!-- HIVEMQ MQTT CONFIG MODAL -->
+  <div id="config-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+    <div class="bg-alma-card border border-alma-border rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl relative">
+      <button onclick="toggleConfigModal()" class="absolute top-4 right-4 text-alma-textMuted hover:text-white p-2">X</button>
+      <h3 class="font-tech font-bold text-base text-white">CONEXÃO MQTT BROKER HIVEMQ</h3>
+      <div class="space-y-3 font-mono text-xs">
+        <div>
+          <label class="block text-alma-textMuted mb-1">Broker Server (WebSocket SSL):</label>
+          <input type="text" id="mqtt-host-input" value="broker.hivemq.com" disabled class="w-full bg-alma-bg border border-alma-border rounded p-2 text-white font-mono opacity-80 cursor-not-allowed">
+        </div>
+        <div>
+          <label class="block text-alma-textMuted mb-1">Tópico de Leitura (Sub):</label>
+          <input type="text" id="mqtt-sub-topic" value="eletromentes_senai_ma_2026/nh13/state" disabled class="w-full bg-alma-bg border border-alma-border rounded p-2 text-white font-mono opacity-80 cursor-not-allowed">
+        </div>
+        <div>
+          <label class="block text-alma-textMuted mb-1">Tópico de Comando (Pub):</label>
+          <input type="text" id="mqtt-pub-topic" value="eletromentes_senai_ma_2026/nh13/control" disabled class="w-full bg-alma-bg border border-alma-border rounded p-2 text-white font-mono opacity-80 cursor-not-allowed">
+        </div>
+      </div>
+      <div class="flex justify-between items-center pt-2 border-t border-alma-border">
+        <button onclick="reconnectMQTT()" class="px-4 py-2 bg-alma-borderLight hover:bg-alma-border text-white font-mono font-bold text-xs rounded transition border border-alma-border">Reconectar MQTT</button>
+        <button onclick="toggleConfigModal()" class="px-4 py-2 bg-alma-bg hover:bg-alma-border text-white font-mono text-xs rounded transition border border-alma-border">Fechar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- JAVASCRIPT SYSTEM ENGINE (HIVEMQ MQTT INTEGRATION) -->
+  <script>
+    // MQTT CONFIGURATION
+    const MQTT_CONFIG = {
+      host: 'broker.hivemq.com',
+      port: 8884, // SSL WebSocket Port for HiveMQ
+      path: '/mqtt',
+      topicState: 'eletromentes_senai_ma_2026/nh13/state',
+      topicControl: 'eletromentes_senai_ma_2026/nh13/control'
+    };
+
+    // GLOBAL STATE
+    const state = {
+      currentTemp: 39.8, setpoint: 40.0, controlMode: 'auto', manualPWM: 50, pwmduty: 42,
+      resistorOhms: 10, voltage: 5.0, servoTopRPM: 0, servoBotRPM: 0,
+      packetCount: 142, txTimer: 20, isTransmitting: false,
+      anomalySimActive: false, anomalyScore: 0.14,
+      mqttConnected: false, chartHistory: []
+    };
+
+    let mqttClient = null;
+
+    // PRE-POPULATE CHART HISTORY
+    const maxDataPoints = 40;
+    const now = Date.now();
+    for (let i = maxDataPoints - 1; i >= 0; i--) {
+      state.chartHistory.push({ 
+        time: new Date(now - i * 3000), 
+        temp: parseFloat((39.0 + (Math.sin(i * 0.4) * 0.8) + ((Math.random() - 0.5) * 0.3)).toFixed(2)) 
+      });
+    }
+
+    // MQTT SETUP & LISTENERS
+    function initMQTT() {
+      const clientId = "eletromentes_dash_" + Math.random().toString(16).substring(2, 10);
+      mqttClient = new Paho.MQTT.Client(MQTT_CONFIG.host, MQTT_CONFIG.port, MQTT_CONFIG.path, clientId);
+
+      mqttClient.onConnectionLost = onConnectionLost;
+      mqttClient.onMessageArrived = onMessageArrived;
+
+      connectMQTTClient();
+    }
+
+    function connectMQTTClient() {
+      updateConnectionBadge('Conectando HiveMQ...', 'yellow');
+      mqttClient.connect({
+        useSSL: true,
+        timeout: 5,
+        keepAliveInterval: 30,
+        onSuccess: onConnectSuccess,
+        onFailure: onConnectFailure
+      });
+    }
+
+    function onConnectSuccess() {
+      state.mqttConnected = true;
+      updateConnectionBadge('HiveMQ MQTT On-line', 'green');
+      mqttClient.subscribe(MQTT_CONFIG.topicState);
+      console.log("MQTT Conectado! Subscrito em: " + MQTT_CONFIG.topicState);
+    }
+
+    function onConnectFailure(response) {
+      state.mqttConnected = false;
+      updateConnectionBadge('HiveMQ Offline (Simulando)', 'red');
+      console.warn("Falha ao conectar MQTT, fallback para simulação:", response.errorMessage);
+    }
+
+    function onConnectionLost(response) {
+      state.mqttConnected = false;
+      updateConnectionBadge('HiveMQ Desconectado', 'red');
+      if (response.errorCode !== 0) {
+        console.warn("Conexão MQTT perdida:", response.errorMessage);
+        setTimeout(connectMQTTClient, 5000); // Tenta reconectar em 5 segundos
+      }
+    }
+
+    function onMessageArrived(message) {
+      try {
+        const data = JSON.parse(message.payloadString);
+        
+        if (data.temp !== undefined) state.currentTemp = parseFloat(data.temp);
+        if (data.pwm !== undefined) {
+          state.pwmduty = data.pwm > 100 ? Math.round((data.pwm / 255) * 100) : Math.round(data.pwm);
+        }
+        if (data.rpm_top !== undefined) state.servoTopRPM = parseInt(data.rpm_top);
+        if (data.rpm_bot !== undefined) state.servoBotRPM = parseInt(data.rpm_bot);
+        if (data.lora_pkts !== undefined) state.packetCount = parseInt(data.lora_pkts);
+        if (data.setpoint !== undefined) state.setpoint = parseFloat(data.setpoint);
+        if (data.mode !== undefined) state.controlMode = data.mode;
+
+        updateDashboardUI();
+        updateRollersAnimation();
+      } catch (err) {
+        console.error("Erro ao processar mensagem MQTT:", err);
+      }
+    }
+
+    function sendCommandToESP(payloadObj) {
+      if (mqttClient && mqttClient.isConnected()) {
+        const messageString = JSON.stringify(payloadObj);
+        const message = new Paho.MQTT.Message(messageString);
+        message.destinationName = MQTT_CONFIG.topicControl;
+        mqttClient.send(message);
+        console.log("Comando MQTT publicado:", MQTT_CONFIG.topicControl, messageString);
+      } else {
+        console.warn("MQTT não está conectado. Comando executado localmente na simulação.");
+      }
+    }
+
+    function reconnectMQTT() {
+      if (mqttClient) {
+        try { mqttClient.disconnect(); } catch (e) {}
+      }
+      connectMQTTClient();
+      toggleConfigModal();
+    }
+
+    function updateConnectionBadge(text, color) {
+      const badge = document.getElementById('system-mode-badge');
+      const dot = document.getElementById('mqtt-ping-dot');
+      const pulse = document.getElementById('mqtt-ping-pulse');
+
+      badge.innerText = text;
+      if (color === 'green') {
+        badge.className = "text-xs font-mono font-medium text-emerald-400";
+        dot.className = "relative inline-flex rounded-full h-2.5 w-2.5 bg-alma-green";
+        pulse.className = "animate-ping absolute inline-flex h-full w-full rounded-full bg-alma-green opacity-75";
+      } else if (color === 'yellow') {
+        badge.className = "text-xs font-mono font-medium text-amber-400";
+        dot.className = "relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-400";
+        pulse.className = "animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75";
+      } else {
+        badge.className = "text-xs font-mono font-medium text-alma-red";
+        dot.className = "relative inline-flex rounded-full h-2.5 w-2.5 bg-alma-red";
+        pulse.className = "animate-ping absolute inline-flex h-full w-full rounded-full bg-alma-red opacity-75";
+      }
+    }
+
+    // MODAL FUNCTIONS
+    function openQrModal() {
+      document.getElementById('qr-modal').classList.remove('hidden');
+      const target = document.getElementById('qrcode-target');
+      target.innerHTML = '';
+      if (typeof QRCode !== 'undefined') {
+        new QRCode(target, { text: window.location.href, width: 180, height: 180, colorDark: "#0f1115", colorLight: "#ffffff" });
+      }
+      document.getElementById('qr-url-text').innerText = window.location.href;
+    }
+
+    function closeQrModal() {
+      document.getElementById('qr-modal').classList.add('hidden');
+    }
+
+    function toggleConfigModal() {
+      document.getElementById('config-modal').classList.toggle('hidden');
+    }
+
+    // CONTROL FUNCTIONS
+    function updateSetpoint(val) {
+      state.setpoint = parseFloat(val);
+      document.getElementById('val-setpoint').innerText = state.setpoint.toFixed(1);
+      sendCommandToESP({ setpoint: state.setpoint });
+      renderChart();
+    }
+
+    function setControlMode(mode) {
+      state.controlMode = mode;
+      if (mode === 'auto') {
+        document.getElementById('btn-mode-auto').className = "px-3 py-1 rounded bg-alma-borderLight text-white font-bold transition";
+        document.getElementById('btn-mode-manual').className = "px-3 py-1 rounded text-alma-textMuted hover:text-white transition";
+        document.getElementById('container-setpoint-slider').classList.remove('hidden');
+        document.getElementById('container-manual-pwm').classList.add('hidden');
+        document.getElementById('kpi-control-mode').innerText = "Automático (PID)";
+      } else {
+        document.getElementById('btn-mode-manual').className = "px-3 py-1 rounded bg-alma-borderLight text-white font-bold transition";
+        document.getElementById('btn-mode-auto').className = "px-3 py-1 rounded text-alma-textMuted hover:text-white transition";
+        document.getElementById('container-manual-pwm').classList.remove('hidden');
+        document.getElementById('container-setpoint-slider').classList.add('hidden');
+        document.getElementById('kpi-control-mode').innerText = "Manual PWM";
+      }
+      sendCommandToESP({ mode: mode });
+    }
+
+    function updateManualPWM(val) {
+      state.manualPWM = parseInt(val);
+      document.getElementById('val-manual-pwm').innerText = state.manualPWM;
+      sendCommandToESP({ pwm: state.manualPWM });
+    }
+
+    function updateServoTop(val) {
+      state.servoTopRPM = parseInt(val);
+      document.getElementById('val-servo-top').innerText = state.servoTopRPM;
+      updateRollersAnimation();
+      sendCommandToESP({ top: state.servoTopRPM });
+    }
+
+    function updateServoBot(val) {
+      state.servoBotRPM = parseInt(val);
+      document.getElementById('val-servo-bot').innerText = state.servoBotRPM;
+      updateRollersAnimation();
+      sendCommandToESP({ bot: state.servoBotRPM });
+    }
+
+    function setServoPreset(rpm) {
+      document.getElementById('slider-servo-top').value = rpm;
+      document.getElementById('slider-servo-bot').value = rpm;
+      updateServoTop(rpm);
+      updateServoBot(rpm);
+    }
+
+    function updateRollersAnimation() {
+      const avgRpm = (state.servoTopRPM + state.servoBotRPM) / 2;
+      const svgIcon = document.getElementById('roll-svg-icon');
+      svgIcon.style.animationDuration = avgRpm === 0 ? '0s' : `${Math.max(0.3, 3.0 - (avgRpm / 350) * 2.5)}s`;
+      document.getElementById('kpi-rpm-val').innerText = Math.round(avgRpm);
+      document.getElementById('kpi-rpm-top').innerText = `${state.servoTopRPM} RPM`;
+      document.getElementById('kpi-rpm-bot').innerText = `${state.servoBotRPM} RPM`;
+    }
+
+    function toggleAnomalySimulation() {
+      state.anomalySimActive = !state.anomalySimActive;
+      const btn = document.getElementById('btn-toggle-anomaly');
+      const badge = document.getElementById('ai-status-badge');
+      
+      if (state.anomalySimActive) {
+        btn.className = "w-full mt-1 py-1 px-2 bg-alma-red text-white font-bold rounded border border-red-500 font-mono text-[11px] transition shadow-md";
+        btn.innerText = "DESATIVAR ANOMALIA";
+        badge.className = "px-2 py-0.5 rounded text-[10px] bg-red-900/30 text-red-400 border border-red-800 font-bold animate-pulse";
+        badge.innerText = "ALERTA CRÍTICO";
+      } else {
+        btn.className = "w-full mt-1 py-1 px-2 bg-alma-borderLight hover:bg-alma-border text-white rounded border border-alma-border font-mono text-[11px] transition shadow-sm";
+        btn.innerText = "Simular Anomalia";
+        badge.className = "px-2 py-0.5 rounded text-[10px] bg-alma-border text-alma-textMuted border border-alma-borderLight font-semibold";
+        badge.innerText = "STANDBY";
+      }
+    }
+
+    // FALLBACK PHYSICS SIMULATION (Runs only if MQTT is disconnected)
+    function runPhysicsSimulation() {
+      if (state.mqttConnected) return; // Se MQTT estiver ativo, os dados vêm da nuvem real
+
+      if (state.controlMode === 'auto') {
+        const tempError = state.setpoint - state.currentTemp;
+        state.pwmduty = tempError > 0 ? Math.min(100, Math.round(tempError * 25 + 20)) : Math.max(0, Math.round(20 + tempError * 15));
+      } else {
+        state.pwmduty = state.manualPWM;
+      }
+
+      const currentPower = ((state.voltage * state.voltage) / state.resistorOhms) * (state.pwmduty / 100);
+      let deltaT = (currentPower * 0.08) + (((state.servoTopRPM + state.servoBotRPM) / 700) * 0.05) - ((state.currentTemp - 26.5) * 0.02);
+
+      if (state.anomalySimActive) {
+        deltaT += 0.35; 
+        state.anomalyScore = Math.min(0.98, state.anomalyScore + 0.05);
+      } else {
+        state.anomalyScore = Math.max(0.12, state.anomalyScore - 0.02);
+      }
+
+      state.currentTemp = parseFloat((state.currentTemp + deltaT * 0.1).toFixed(2));
+      updateDashboardUI();
+    }
+
+    function updateDashboardUI() {
+      state.chartHistory.push({ time: new Date(), temp: state.currentTemp });
+      if (state.chartHistory.length > maxDataPoints) state.chartHistory.shift();
+
+      document.getElementById('kpi-temp-val').innerText = state.currentTemp.toFixed(1);
+      document.getElementById('kpi-pwm-val').innerText = state.pwmduty;
+      document.getElementById('kpi-power-val').innerText = `${((2.5) * (state.pwmduty / 100)).toFixed(2)} W`;
+      document.getElementById('calc-power-watt').innerText = `${((2.5) * (state.pwmduty / 100)).toFixed(2)} W`;
+      document.getElementById('kpi-ai-score').innerText = state.anomalyScore.toFixed(2);
+      document.getElementById('kpi-lora-pkts').innerText = state.packetCount;
+
+      const pct = Math.min(100, Math.max(0, ((state.currentTemp - 20) / 40) * 100));
+      document.getElementById('temp-progress-bar').style.width = `${pct}%`;
+
+      const badge = document.getElementById('temp-status-badge');
+      if (state.currentTemp > 45.0 || state.anomalySimActive) {
+        badge.className = "px-2 py-0.5 rounded text-[10px] bg-red-900/30 text-red-400 border border-red-800 font-bold animate-pulse";
+        badge.innerText = "CRÍTICO";
+        document.getElementById('temp-progress-bar').style.backgroundColor = '#f87171';
+      } else if (state.currentTemp > 41.5) {
+        badge.className = "px-2 py-0.5 rounded text-[10px] bg-yellow-900/30 text-yellow-400 border border-yellow-800 font-bold";
+        badge.innerText = "ATENÇÃO";
+        document.getElementById('temp-progress-bar').style.backgroundColor = '#fbbf24';
+      } else {
+        badge.className = "px-2 py-0.5 rounded text-[10px] bg-emerald-900/30 text-emerald-400 border border-emerald-800 font-semibold";
+        badge.innerText = "NORMAL";
+        document.getElementById('temp-progress-bar').style.backgroundColor = '#a2a9b8';
+      }
+      renderChart();
+    }
+
+    // LORA TX & TIMER
+    function tickTimer() {
+      state.txTimer--;
+      document.getElementById('timer-countdown').innerText = `${state.txTimer}s`;
+      if (state.txTimer <= 0) {
+        triggerLoraTransmission();
+        state.txTimer = 20;
+      }
+    }
+
+    function triggerLoraTransmission() {
+      // 1. Envia o disparo via MQTT se estiver conectado
+      sendCommandToESP({ lora_tx: true });
+
+      // 2. Atualiza a interface visual (Dashboard)
+      state.packetCount++;
+      document.getElementById('kpi-lora-pkts').innerText = state.packetCount;
+      
+      document.getElementById('tx-led').className = "w-3.5 h-3.5 rounded-full led-tx-active";
+      document.getElementById('tx-led-mobile').className = "w-3 h-3 rounded-full led-tx-active";
+      document.getElementById('tx-status-label').innerText = "TRANSMITINDO...";
+      document.getElementById('tx-status-label').className = "text-xs font-mono font-bold text-alma-green animate-pulse";
+      
+      addTelemetryLogRecord();
+
+      // 3. Reset do LED visual após 1.5s
+      setTimeout(() => {
+        document.getElementById('tx-led').className = "w-3.5 h-3.5 rounded-full led-tx-off";
+        document.getElementById('tx-led-mobile').className = "w-3 h-3 rounded-full led-tx-off";
+        document.getElementById('tx-status-label').innerText = "STANDBY (20s)";
+        document.getElementById('tx-status-label').className = "text-xs font-mono font-bold text-white";
+      }, 1500);
+    }
+
+    function triggerManualLoraTx() {
+      state.txTimer = 20;
+      triggerLoraTransmission();
+    }
+
+    function addTelemetryLogRecord() {
+      const tb = document.getElementById('telemetry-log-body');
+      const tr = document.createElement('tr');
+      const isAnom = state.anomalySimActive || state.currentTemp > 45.0;
+      tr.innerHTML = `
+        <td class="py-2 px-3 text-white font-semibold">${new Date().toLocaleTimeString('pt-BR')}</td>
+        <td class="py-2 px-3 text-alma-cyan">915.0 MHz</td>
+        <td class="py-2 px-3 font-bold ${isAnom ? 'text-alma-red' : 'text-emerald-400'}">${state.currentTemp.toFixed(2)} °C</td>
+        <td class="py-2 px-3">${state.pwmduty}% PWM</td>
+        <td class="py-2 px-3">${Math.round((state.servoTopRPM + state.servoBotRPM) / 2)} RPM</td>
+        <td class="py-2 px-3">${isAnom ? '<span class="px-1.5 py-0.5 rounded bg-red-900/30 text-red-400 text-[9px] border border-red-800">ANOMALIA</span>' : '<span class="px-1.5 py-0.5 rounded bg-emerald-900/30 text-emerald-400 text-[9px] border border-emerald-800">TX OK</span>'}</td>
+        <td class="py-2 px-3 text-right"><span class="inline-block w-2.5 h-2.5 rounded-full bg-alma-green shadow-sm shadow-alma-green"></span></td>
+      `;
+      tb.insertBefore(tr, tb.firstChild);
+      if (tb.children.length > 12) tb.removeChild(tb.lastChild);
+    }
+    
+    function clearTelemetryLog() { document.getElementById('telemetry-log-body').innerHTML = ''; }
+
+    // CANVAS DRAWING
+    const canvas = document.getElementById('tempChart');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('canvas-container');
+    new ResizeObserver(entries => {
+      for (let e of entries) { canvas.width = e.contentRect.width; canvas.height = e.contentRect.height; renderChart(); }
+    }).observe(container);
+
+    function renderChart() {
+      if (!ctx || canvas.width === 0) return;
+      const w = canvas.width, h = canvas.height, p = { top: 25, right: 35, bottom: 30, left: 45 };
+      const gW = w - p.left - p.right, gH = h - p.top - p.bottom;
+      ctx.clearRect(0, 0, w, h);
+
+      const getY = (val) => h - p.bottom - (((val - 20) / 35) * gH);
+      const getX = (index) => p.left + (index / (maxDataPoints - 1)) * gW;
+
+      const nTop = getY(40.4), nBot = getY(27.2);
+      ctx.fillStyle = 'rgba(162, 169, 184, 0.05)'; ctx.fillRect(p.left, nTop, gW, nBot - nTop);
+      ctx.strokeStyle = 'rgba(162, 169, 184, 0.2)'; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+      ctx.beginPath(); ctx.moveTo(p.left, nTop); ctx.lineTo(w - p.right, nTop); ctx.moveTo(p.left, nBot); ctx.lineTo(w - p.right, nBot); ctx.stroke();
+
+      const setY = getY(state.setpoint);
+      ctx.strokeStyle = '#8b929e'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 4]);
+      ctx.beginPath(); ctx.moveTo(p.left, setY); ctx.lineTo(w - p.right, setY); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = '#8b929e'; ctx.font = '10px JetBrains Mono'; ctx.fillText(`SETPOINT ${state.setpoint.toFixed(1)}°C`, w - p.right - 85, setY - 5);
+
+      ctx.strokeStyle = '#2a2f3a'; ctx.lineWidth = 1;
+      [20, 30, 40, 50].forEach(v => {
+        const yP = getY(v);
+        ctx.beginPath(); ctx.moveTo(p.left, yP); ctx.lineTo(w - p.right, yP); ctx.stroke();
+        ctx.fillStyle = '#8b929e'; ctx.textAlign = 'right'; ctx.fillText(`${v}°C`, p.left - 8, yP + 3);
+      });
+
+      if (state.chartHistory.length > 1) {
+        ctx.beginPath();
+        state.chartHistory.forEach((pt, i) => i === 0 ? ctx.moveTo(getX(i), getY(pt.temp)) : ctx.lineTo(getX(i), getY(pt.temp)));
+        const lGrad = ctx.createLinearGradient(0, 0, w, 0);
+        lGrad.addColorStop(0, '#a2a9b8'); lGrad.addColorStop(1, state.anomalySimActive ? '#f87171' : '#a2a9b8');
+        ctx.strokeStyle = lGrad; ctx.lineWidth = 3; ctx.stroke();
+
+        ctx.lineTo(getX(state.chartHistory.length - 1), h - p.bottom); ctx.lineTo(p.left, h - p.bottom); ctx.closePath();
+        const fGrad = ctx.createLinearGradient(0, p.top, 0, h - p.bottom);
+        fGrad.addColorStop(0, state.anomalySimActive ? 'rgba(248, 113, 113, 0.25)' : 'rgba(162, 169, 184, 0.2)');
+        fGrad.addColorStop(1, 'rgba(15, 17, 21, 0.0)');
+        ctx.fillStyle = fGrad; ctx.fill();
+
+        const lX = getX(state.chartHistory.length - 1), lY = getY(state.chartHistory[state.chartHistory.length - 1].temp);
+        ctx.fillStyle = state.anomalySimActive ? '#f87171' : '#a2a9b8';
+        ctx.beginPath(); ctx.arc(lX, lY, 5, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2; ctx.stroke();
+      }
+    }
+
+    // INIT
+    window.onload = function() {
+      updateRollersAnimation();
+      initMQTT();
+      setInterval(runPhysicsSimulation, 1000);
+      setInterval(tickTimer, 1000);
+      addTelemetryLogRecord();
+    };
+  </script>
+</body>
+</html>
