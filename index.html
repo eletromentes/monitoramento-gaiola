@@ -312,7 +312,7 @@
           <div class="overflow-x-auto max-h-56">
             <table class="w-full text-left font-mono text-xs text-alma-textMuted">
               <thead class="bg-alma-panel text-white uppercase text-[10px] sticky top-0 border-b border-alma-border">
-                <tr><th class="py-2 px-3">Hora</th><th class="py-2 px-3">Freq</th><th class="py-2 px-3">Temp (DS1820)</th><th class="py-2 px-3">PWM MOSFET</th><th class="py-2 px-3">RPM Servos</th><th class="py-2 px-3">Status</th><th class="py-2 px-3 text-right">LED TX</th></tr>
+                <tr><th class="py-2 px-3">Hora</th><th class="py-2 px-3">Freq</th><th class="py-2 px-3">Temp (DS1820)</th><th class="py-2 px-3">PWM MOSFET</th><th class="py-2 px-3">RPM Servos</th><th class="py-2 px-3">Mensagem LoRa</th><th class="py-2 px-3">Status</th><th class="py-2 px-3 text-right">LED TX</th></tr>
               </thead>
               <tbody id="telemetry-log-body" class="divide-y divide-alma-border/40"></tbody>
             </table>
@@ -590,6 +590,14 @@
     const CLOUD = location.protocol === 'https:' || /[?&]nuvem/.test(location.search);
     const MQ_URL = 'wss://broker.hivemq.com:8884/mqtt', MQ_TOPIC = 'eletromentes/4b1776a1f9';
     let mq = null, mqData = null, mqAt = 0, mqUp = -1, PIN = '';
+    // Sincroniza contagem regressiva e LED com o ESP (usado no modo nuvem e no modo IP local)
+    let lastPkts = -1;
+    function syncLora(d) {
+      state.deviceAt = Date.now();
+      if (d.next != null) state.txTimer = d.next;
+      if (lastPkts >= 0 && d.lora_pkts > lastPkts) triggerLoraTransmission(d.msg, true);
+      lastPkts = d.lora_pkts;
+    }
     function startCloud() {
       mq = mqtt.connect(MQ_URL, { reconnectPeriod: 3000 });
       mq.on('connect', () => mq.subscribe(MQ_TOPIC + '/state'));
@@ -606,6 +614,7 @@
           b.innerText = 'Ao vivo · T3S3 (nuvem)'; b.className = 'text-xs font-mono font-medium text-alma-cyan';
           state.currentTemp = mqData.temp; state.pwmduty = Math.round((mqData.pwm / 255) * 100);
           state.servoTopRPM = mqData.rpm_top; state.servoBotRPM = mqData.rpm_bot; state.packetCount = mqData.lora_pkts;
+          syncLora(mqData);
           return updateDashboardUI();
         }
         b.innerText = 'Simulação (T3S3 offline)'; b.className = 'text-xs font-mono font-medium text-emerald-400';
@@ -622,6 +631,7 @@
         state.servoTopRPM = data.rpm_top;
         state.servoBotRPM = data.rpm_bot;
         state.packetCount = data.lora_pkts;
+        syncLora(data);
         updateDashboardUI();
       } catch (error) {
         console.error("Erro ao ler dados do ESP32:", error);
@@ -695,20 +705,22 @@
 
     // LORA TX & CHART RENDERING
     function tickTimer() {
+      const live = Date.now() - (state.deviceAt || 0) < 6000;   // dados reais chegando do ESP
       state.txTimer--;
-      document.getElementById('timer-countdown').innerText = `${state.txTimer}s`;
-      if (state.txTimer <= 0) {
+      if (live && state.txTimer < 0) state.txTimer = 0;
+      document.getElementById('timer-countdown').innerText = `${Math.max(state.txTimer, 0)}s`;
+      if (state.txTimer <= 0 && !live) {   // simulação: a página dispara sozinha; ao vivo, quem manda é o ESP
         triggerLoraTransmission();
         state.txTimer = 20;
       }
     }
 
-    function triggerLoraTransmission() {
+    function triggerLoraTransmission(msg, fromDevice) {
       // 1. Dispara o comando para o LilyGO T3S3 físico (se o modo real estiver ativo)
       // (o firmware agora transmite sozinho a cada 20 s; a página só exibe o contador)
 
       // 2. Atualiza a interface visual (Dashboard)
-      state.packetCount++;
+      if (!fromDevice) state.packetCount++;
       document.getElementById('kpi-lora-pkts').innerText = state.packetCount;
       
       document.getElementById('tx-led').className = "w-3.5 h-3.5 rounded-full led-tx-active";
@@ -716,7 +728,7 @@
       document.getElementById('tx-status-label').innerText = "TRANSMITINDO...";
       document.getElementById('tx-status-label').className = "text-xs font-mono font-bold text-alma-green animate-pulse";
       
-      addTelemetryLogRecord();
+      addTelemetryLogRecord(msg);
 
       // 3. Desliga o LED visual após 1.5 segundos
       setTimeout(() => {
@@ -728,11 +740,14 @@
     }
 
     function triggerManualLoraTx() {
-      state.txTimer = 20; // Reseta o timer
-      triggerLoraTransmission(); // Chama a função principal que agora possui o fetch
+      const live = Date.now() - (state.deviceAt || 0) < 6000;
+      if (CLOUD && live) { sendCommandToESP({ lora: 1 }); return; }   // LED e log aparecem quando o ESP confirmar o envio
+      if (!CLOUD && state.realEsp32Mode && state.esp32Ip) { fetch(`http://${state.esp32Ip}/api/lora`, { method: 'POST' }).catch(e => console.error(e)); return; }
+      state.txTimer = 20;
+      triggerLoraTransmission();
     }
 
-    function addTelemetryLogRecord() {
+    function addTelemetryLogRecord(msg) {
       const tb = document.getElementById('telemetry-log-body');
       const tr = document.createElement('tr');
       const isAnom = state.anomalySimActive || state.currentTemp > 45.0;
@@ -742,6 +757,7 @@
         <td class="py-2 px-3 font-bold ${isAnom ? 'text-alma-red' : 'text-emerald-400'}">${state.currentTemp.toFixed(2)} °C</td>
         <td class="py-2 px-3">${state.pwmduty}% PWM</td>
         <td class="py-2 px-3">${Math.round((state.servoTopRPM + state.servoBotRPM) / 2)} RPM</td>
+        <td class="py-2 px-3 text-white">${msg || ('T:' + state.currentTemp.toFixed(2) + ' P:' + Math.round(state.pwmduty * 2.55))}</td>
         <td class="py-2 px-3">${isAnom ? '<span class="px-1.5 py-0.5 rounded bg-red-900/30 text-red-400 text-[9px] border border-red-800">ANOMALIA</span>' : '<span class="px-1.5 py-0.5 rounded bg-emerald-900/30 text-emerald-400 text-[9px] border border-emerald-800">TX OK</span>'}</td>
         <td class="py-2 px-3 text-right"><span class="inline-block w-2.5 h-2.5 rounded-full bg-alma-green shadow-sm shadow-alma-green"></span></td>
       `;
