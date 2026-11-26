@@ -511,7 +511,7 @@
       renderChart();
     }
 
-    function setControlMode(mode) {
+    function setControlMode(mode, fromDevice) {
       state.controlMode = mode;
       if (mode === 'auto') {
         document.getElementById('btn-mode-auto').className = "px-3 py-1 rounded bg-alma-borderLight text-white font-bold transition";
@@ -526,7 +526,7 @@
         document.getElementById('container-setpoint-slider').classList.add('hidden');
         document.getElementById('kpi-control-mode').innerText = "Manual PWM";
       }
-      sendCommandToESP({ mode: mode });
+      if (!fromDevice) sendCommandToESP({ mode: mode });
     }
 
     function updateManualPWM(val) {
@@ -590,6 +590,23 @@
     const CLOUD = location.protocol === 'https:' || /[?&]nuvem/.test(location.search);
     const MQ_URL = 'wss://broker.hivemq.com:8884/mqtt', MQ_TOPIC = 'eletromentes/4b1776a1f9';
     let mq = null, mqData = null, mqAt = 0, mqUp = -1, PIN = '';
+    // Espelha no painel o que o ESP está fazendo (RPM, alvo, modo, PWM manual), igual em todos os dispositivos
+    const touched = {};
+    document.addEventListener('input', e => { if (e.target.id) touched[e.target.id] = Date.now(); });
+    function setSlider(id, labelId, v) {
+      const el = document.getElementById(id);
+      if (el && Date.now() - (touched[id] || 0) > 3000) el.value = v;   // não briga com quem está arrastando
+      const lb = document.getElementById(labelId); if (lb) lb.innerText = v;
+    }
+    function syncControls(d) {
+      setSlider('slider-servo-top', 'val-servo-top', d.rpm_top);
+      setSlider('slider-servo-bot', 'val-servo-bot', d.rpm_bot);
+      updateRollersAnimation();   // KPIs de RPM e animação dos cilindros
+      if (d.sp != null) { state.setpoint = d.sp; setSlider('slider-setpoint', 'val-setpoint', d.sp.toFixed(1)); }
+      if (d.man != null) { state.manualPWM = d.man; setSlider('slider-pwm', 'val-manual-pwm', d.man); }
+      if (d.auto != null) { const m = d.auto ? 'auto' : 'manual'; if (state.controlMode !== m) setControlMode(m, true); }
+    }
+
     // Sincroniza contagem regressiva e LED com o ESP (usado no modo nuvem e no modo IP local)
     let lastPkts = -1;
     function syncLora(d) {
@@ -615,6 +632,7 @@
           state.currentTemp = mqData.temp; state.pwmduty = Math.round((mqData.pwm / 255) * 100);
           state.servoTopRPM = mqData.rpm_top; state.servoBotRPM = mqData.rpm_bot; state.packetCount = mqData.lora_pkts;
           syncLora(mqData);
+          syncControls(mqData);
           return updateDashboardUI();
         }
         b.innerText = 'Simulação (T3S3 offline)'; b.className = 'text-xs font-mono font-medium text-emerald-400';
@@ -632,6 +650,7 @@
         state.servoBotRPM = data.rpm_bot;
         state.packetCount = data.lora_pkts;
         syncLora(data);
+        syncControls(data);
         updateDashboardUI();
       } catch (error) {
         console.error("Erro ao ler dados do ESP32:", error);
